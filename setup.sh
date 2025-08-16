@@ -277,7 +277,16 @@ ifneq (,$(wildcard .env))
     export
 endif
 
-DOCKER_COMPOSE := docker compose
+# Smart Docker Compose detection (handles all versions)
+DOCKER_COMPOSE := $(shell \
+	if docker-compose --version >/dev/null 2>&1; then \
+		echo "docker-compose"; \
+	elif docker compose version >/dev/null 2>&1; then \
+		echo "docker compose"; \
+	else \
+		echo "docker-compose"; \
+	fi)
+
 # Exec into always-on wpcli container (no more "Creating ..." spam)
 RUN_WP := $(DOCKER_COMPOSE) exec -T wpcli wp
 DB_EXEC := $(DOCKER_COMPOSE) exec -T db
