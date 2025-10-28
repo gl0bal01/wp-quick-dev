@@ -76,6 +76,15 @@ MAILPIT_SMTP_PORT=1025
 WP_URL=http://localhost:8080
 TZ=Europe/Paris
 
+# PHP Version (supported: 8.1, 8.2, 8.3, 8.4, or latest)
+PHP_VERSION=8.4
+
+# Upload and Memory Limits
+PHP_UPLOAD_MAX_FILESIZE=128M
+PHP_POST_MAX_SIZE=128M
+PHP_MEMORY_LIMIT=512M
+PMA_UPLOAD_LIMIT=128M
+
 # Database
 DB_NAME=wordpress
 DB_USER=wordpress
@@ -85,9 +94,6 @@ DB_ROOT_PASSWORD=root_secure_$(openssl rand -hex 8)
 # Host user mapping (for reference)
 HOST_UID=$HOST_UID
 HOST_GID=$HOST_GID
-
-# phpMyAdmin
-PMA_UPLOAD_LIMIT=128M
 
 # WordPress Config
 WP_DEBUG=true
@@ -112,7 +118,7 @@ sed -i.bak -e 's/password=wordpress_secure_[a-f0-9]*/password=your_secure_passwo
 cat > docker-compose.yml << 'DOCKER_EOF'
 services:
   wordpress:
-    image: wordpress:latest
+    image: "wordpress:php${PHP_VERSION:-8.4}"
     ports:
       - "${WP_PORT:-8080}:80"
     environment:
@@ -121,6 +127,10 @@ services:
       WORDPRESS_DB_PASSWORD: ${DB_PASSWORD:-wordpress}
       WORDPRESS_DB_NAME: ${DB_NAME:-wordpress}
       WORDPRESS_DEBUG: ${WP_DEBUG:-true}
+      # PHP Configuration via environment
+      PHP_UPLOAD_MAX_FILESIZE: ${PHP_UPLOAD_MAX_FILESIZE:-128M}
+      PHP_POST_MAX_SIZE: ${PHP_POST_MAX_SIZE:-128M}
+      PHP_MEMORY_LIMIT: ${PHP_MEMORY_LIMIT:-512M}
       WORDPRESS_CONFIG_EXTRA: |
         define('WP_DEBUG_LOG', ${WP_DEBUG_LOG:-true});
         define('WP_DEBUG_DISPLAY', ${WP_DEBUG_DISPLAY:-false});
@@ -209,7 +219,7 @@ services:
 
   # Persistent wpcli container (no more "Creating 2/2" spam)
   wpcli:
-    image: wordpress:cli-php8.2
+    image: wordpress:cli-php8.4
     working_dir: /var/www/html
     command: tail -f /dev/null
     environment:
@@ -266,7 +276,7 @@ DOCKER_EOF
 cat > Makefile << 'MAKEFILE_EOF'
 # WordPress Development Environment
 .DEFAULT_GOAL := help
-.PHONY: help up down install clean shell db-shell logs         plugin theme backup restore list-backups fix-permissions         wait-db wp sr cron-run prune-backups phpinfo test health restart         plugin-repo plugin-clone plugin-list theme-repo theme-clone
+.PHONY: help up down install clean shell db-shell logs         plugin theme backup restore db-import list-backups fix-permissions         wait-db wp sr cron-run prune-backups phpinfo test health restart         plugin-repo plugin-clone plugin-list theme-repo theme-clone
 
 # Stop "make[1]: on entre/quitte le répertoire ..." messages
 MAKEFLAGS += --no-print-directory
@@ -458,6 +468,26 @@ restore: ## Restore database (usage: make restore file=backup.sql[.gz])
 		echo "✅ Database restored from $$PATH_IN" \
 	'
 
+db-import: ## Import external database (usage: make db-import file=/path/to/database.sql[.gz])
+	@if [ -z "$(file)" ]; then \
+		echo "❌ Usage: make db-import file=/path/to/database.sql[.gz]"; \
+		echo "Example: make db-import file=/home/user/mysite.sql.gz"; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(file)" ]; then \
+		echo "❌ File not found: $(file)"; \
+		exit 1; \
+	fi
+	@if ! $(DOCKER_COMPOSE) ps db | grep -q "Up" 2>/dev/null; then \
+		echo "❌ Database container is not running. Please start it first:"; \
+		echo "   make up"; \
+		exit 1; \
+	fi
+	@echo "📦 Importing database from $(file)..."
+	@FILENAME=$$(basename "$(file)"); \
+	cp "$(file)" "backups/$$FILENAME" && \
+	echo "✅ Copied to backups/$$FILENAME"; \
+	$(MAKE) restore file="$$FILENAME"
 
 list-backups: ## List available backups
 	@echo "📁 Available backups:"
@@ -490,6 +520,8 @@ MAKEFILE_EOF
 mkdir -p .docker/php .docker/mysql-init .docker/mysql-logs
 cat > .docker/php/php.ini << 'PHP_EOF'
 ; Development PHP Configuration
+; NOTE: PHP upload/memory limits are set via .env file
+; The docker-compose.yml passes PHP_UPLOAD_MAX_FILESIZE, PHP_POST_MAX_SIZE, PHP_MEMORY_LIMIT
 ; Memory and execution
 memory_limit = 512M
 max_execution_time = 300
@@ -646,6 +678,9 @@ make backup
 # Restore from backup
 make restore file=backup-20240116-143022.sql.gz
 
+# Import external database (from anywhere on your system)
+make db-import file=/path/to/database.sql.gz
+
 # List available backups
 make list-backups
 ```
@@ -675,6 +710,47 @@ make sr old=http://old.local new=http://new.local
 - **WordPress**: http://localhost:8080
 - **phpMyAdmin**: http://localhost:8081
 - **Mailpit** (dev profile): http://localhost:8025
+
+## Configuration
+
+Edit the `.env` file to customize your environment:
+
+### PHP Version
+```bash
+# Specify PHP version (8.1, 8.2, 8.3, 8.4)
+PHP_VERSION=8.4
+```
+
+### Upload and Memory Limits
+```bash
+# Customize PHP limits
+PHP_UPLOAD_MAX_FILESIZE=128M
+PHP_POST_MAX_SIZE=128M
+PHP_MEMORY_LIMIT=512M
+PMA_UPLOAD_LIMIT=128M  # phpMyAdmin upload limit
+```
+
+### Ports
+```bash
+# Change if ports are already in use
+WP_PORT=8080
+PMA_PORT=8081
+MAILPIT_HTTP_PORT=8025
+```
+
+### Database
+```bash
+# Auto-generated secure passwords
+DB_NAME=wordpress
+DB_USER=wordpress
+DB_PASSWORD=wordpress_secure_[random]
+DB_ROOT_PASSWORD=root_secure_[random]
+```
+
+After changing `.env`, restart the environment:
+```bash
+make restart
+```
 
 ## File Structure
 ```
@@ -1014,6 +1090,18 @@ echo "   make plugin-repo name=my-plugin     # Initialize git repo"
 echo "   make plugin-clone repo=<git-url>    # Clone existing plugin"
 echo "   make plugin-list                    # List all plugins"
 echo "   ./plugin-status.sh                  # Detailed plugin status"
+echo ""
+blue "💾 Database Management:"
+echo "   make backup                         # Create database backup"
+echo "   make restore file=backup.sql.gz     # Restore from backup"
+echo "   make db-import file=/path/to/db.sql.gz  # Import external database"
+echo "   make list-backups                   # List available backups"
+echo ""
+blue "⚙️  Configuration (edit .env file):"
+echo "   PHP_VERSION=8.4                     # PHP version (8.1, 8.2, 8.3, 8.4)"
+echo "   PHP_UPLOAD_MAX_FILESIZE=128M        # Upload size limit"
+echo "   PHP_MEMORY_LIMIT=512M               # PHP memory limit"
+echo "   Then run: make restart"
 echo ""
 blue "🌐 Access URLs:"
 echo "   WordPress: ${WP_URL:-http://localhost:8080}"

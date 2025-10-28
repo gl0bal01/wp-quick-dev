@@ -73,6 +73,36 @@ After installation, you can access:
 - 🗄️ **phpMyAdmin**: http://localhost:8081
 - 📧 **Mailpit** (email testing): http://localhost:8025
 
+## 🚀 Quick Reference
+
+Essential commands for common tasks:
+
+```bash
+# Start environment
+make up
+
+# Import external database
+make db-import file=/path/to/database.sql.gz
+
+# Fix URLs after import
+make sr old=http://oldsite.com new=http://localhost:8080
+
+# Fix permissions if needed
+make fix-permissions
+
+# Check what theme is active
+make wp cmd="theme list"
+
+# Install and activate a theme
+make wp cmd="theme install themename --activate"
+
+# Check site health
+make health
+
+# View logs for troubleshooting
+make logs
+```
+
 ## 📖 Complete Command Reference
 
 ### 🏗️ Environment Management
@@ -126,9 +156,12 @@ git push -u origin main
 |---------|-------------|---------|
 | `make backup` | Create database backup | `make backup` |
 | `make restore file=<backup>` | Restore from backup | `make restore file=backup-20240116-143022.sql.gz` |
+| `make db-import file=<path>` | Import external database | `make db-import file=/path/to/database.sql.gz` |
 | `make list-backups` | List available backups | `make list-backups` |
 
 **Backup files are stored in the `backups/` directory and are automatically compressed and timestamped.**
+
+**Import tip:** Use `make db-import` to import any database file from your system. It will be copied to the backups directory and imported automatically.
 
 ### 🛠️ WordPress Management (WP-CLI)
 
@@ -192,10 +225,19 @@ my-awesome-project/
 Edit the `.env` file to customize your environment:
 
 ```bash
+# PHP Version (latest WordPress with specific PHP version)
+PHP_VERSION=8.4              # Options: 8.1, 8.2, 8.3, 8.4
+
+# Upload and Memory Limits
+PHP_UPLOAD_MAX_FILESIZE=128M # Maximum file upload size
+PHP_POST_MAX_SIZE=128M       # Maximum POST request size
+PHP_MEMORY_LIMIT=512M        # PHP memory limit
+PMA_UPLOAD_LIMIT=128M        # phpMyAdmin upload limit
+
 # Ports (change if needed)
 WP_PORT=8080                 # WordPress port
-PMA_PORT=8081               # phpMyAdmin port
-MAILPIT_HTTP_PORT=8025      # Mailpit web interface
+PMA_PORT=8081                # phpMyAdmin port
+MAILPIT_HTTP_PORT=8025       # Mailpit web interface
 
 # WordPress URL
 WP_URL=http://localhost:8080
@@ -204,6 +246,11 @@ WP_URL=http://localhost:8080
 DB_NAME=wordpress
 DB_USER=wordpress
 DB_PASSWORD=wordpress_secure_[random]
+```
+
+After changing any `.env` values, restart the environment:
+```bash
+make restart
 ```
 
 ### PHP Configuration
@@ -265,20 +312,23 @@ make logs
 make restart
 ```
 
-### Health Check
-
-Run the health check script to diagnose issues:
+**After importing a database:**
 ```bash
-./health-check.sh
+# Fix URLs to match your local environment
+make sr old=http://youroldsite.com new=http://localhost:8080
+
+# If you get a blank page, check theme files exist
+make wp cmd="theme list"
+
+# Activate a different theme if needed
+make wp cmd="theme activate twentytwentyfour"
 ```
 
-### Development Setup
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Commit your changes: `git commit -m 'Add amazing feature'`
-4. Push to the branch: `git push origin feature/amazing-feature`
-5. Open a Pull Request
+**Health Check:**
+```bash
+# Run comprehensive health check
+./health-check.sh
+```
 
 ## 📋 Requirements
 
@@ -288,6 +338,16 @@ Run the health check script to diagnose issues:
 - **Operating System**: Linux, macOS, or Windows (with WSL2)
 - **Memory**: At least 2GB RAM available for Docker
 - **Disk Space**: At least 2GB free space
+
+## 🤝 Contributing
+
+Contributions are welcome! To contribute:
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Commit your changes: `git commit -m 'Add amazing feature'`
+4. Push to the branch: `git push origin feature/amazing-feature`
+5. Open a Pull Request
 
 ## 📄 License
 
