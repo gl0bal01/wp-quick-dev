@@ -83,6 +83,7 @@ PHP_VERSION=8.4
 PHP_UPLOAD_MAX_FILESIZE=128M
 PHP_POST_MAX_SIZE=128M
 PHP_MEMORY_LIMIT=512M
+PHP_MAX_INPUT_VARS=2000
 PMA_UPLOAD_LIMIT=128M
 
 # Database
@@ -531,6 +532,7 @@ max_input_time = 300
 upload_max_filesize = 128M
 post_max_size = 128M
 max_file_uploads = 50
+max_input_vars = 2000
 
 ; Error reporting and logging
 display_errors = On
@@ -727,6 +729,7 @@ PHP_VERSION=8.4
 PHP_UPLOAD_MAX_FILESIZE=128M
 PHP_POST_MAX_SIZE=128M
 PHP_MEMORY_LIMIT=512M
+PHP_MAX_INPUT_VARS=2000
 PMA_UPLOAD_LIMIT=128M  # phpMyAdmin upload limit
 ```
 
