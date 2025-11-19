@@ -200,6 +200,129 @@ make wp cmd="post list"
 | `make logs service=<name>` | View specific service logs | `make logs service=wordpress` |
 | `make phpinfo` | Create phpinfo.php file | `make phpinfo` |
 
+## 🐳 Docker Command Reference
+
+If you prefer using Docker commands directly instead of Make, here's the equivalent reference:
+
+### Basic Operations
+
+| Make Command | Docker Equivalent |
+|--------------|-------------------|
+| `make up` | `docker compose up -d` |
+| `make down` | `docker compose down` |
+| `make restart` | `docker compose restart` |
+| `make logs` | `docker compose logs -f` |
+| `make logs service=wordpress` | `docker compose logs -f wordpress` |
+| `make health` | `docker compose ps` |
+
+### WordPress CLI Commands
+
+```bash
+# Run WP-CLI commands
+docker compose exec wpcli wp <command>
+
+# Examples:
+docker compose exec wpcli wp plugin list
+docker compose exec wpcli wp theme list
+docker compose exec wpcli wp user create john john@example.com --role=administrator
+
+# Search and replace URLs
+docker compose exec wpcli wp search-replace 'http://oldsite.com' 'http://localhost:8080'
+```
+
+### Container Shell Access
+
+```bash
+# WordPress container shell
+docker compose exec wordpress bash
+
+# Database container shell
+docker compose exec db bash
+
+# MariaDB shell
+docker compose exec db mysql -u wordpress -p wordpress
+```
+
+### Database Operations
+
+```bash
+# Create database backup
+docker compose exec db mysqldump -u wordpress -pwordpress wordpress | gzip > backups/backup-$(date +%Y%m%d-%H%M%S).sql.gz
+
+# Restore database from backup
+gunzip < backups/backup-20240116-143022.sql.gz | docker compose exec -T db mysql -u wordpress -pwordpress wordpress
+
+# Import external database
+gunzip < /path/to/database.sql.gz | docker compose exec -T db mysql -u wordpress -pwordpress wordpress
+```
+
+### File Permissions
+
+```bash
+# Fix permissions (Linux/macOS)
+docker compose exec wordpress chown -R www-data:www-data /var/www/html/wp-content
+
+# Fix permissions (cross-platform)
+docker compose exec wordpress chmod -R 777 /var/www/html/wp-content
+```
+
+### Building and Cleaning
+
+```bash
+# Rebuild containers
+docker compose up -d --build
+
+# Stop and remove all containers, networks, and volumes
+docker compose down -v
+
+# View container resource usage
+docker stats
+```
+
+### Advanced Docker Operations
+
+```bash
+# View running containers
+docker ps
+
+# View all containers (including stopped)
+docker ps -a
+
+# Inspect a specific container
+docker inspect wp-quick-dev-wordpress-1
+
+# View container logs with timestamps
+docker compose logs -f --timestamps wordpress
+
+# Execute command without shell
+docker compose exec -T wordpress wp plugin list
+
+# Copy files from container to host
+docker cp wp-quick-dev-wordpress-1:/var/www/html/wp-config.php ./
+
+# Copy files from host to container
+docker cp ./my-file.php wp-quick-dev-wordpress-1:/var/www/html/
+```
+
+### Network and Volume Management
+
+```bash
+# List networks
+docker network ls
+
+# Inspect network
+docker network inspect wp-quick-dev_default
+
+# List volumes
+docker volume ls
+
+# Inspect volume
+docker volume inspect wp-quick-dev_db_data
+
+# Remove unused volumes
+docker volume prune
+```
+
 ## 📁 Project Structure
 
 ```
