@@ -476,10 +476,6 @@ Contributions are welcome! To contribute:
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## ⭐ Show Your Support
-
-If this project helped you, please consider giving it a ⭐ on GitHub!
-
 ---
 
 **Happy Coding!** 🎉
