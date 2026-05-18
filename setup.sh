@@ -12,7 +12,25 @@ yellow() { echo -e "\033[33m$1\033[0m"; }
 blue() { echo -e "\033[34m$1\033[0m"; }
 
 PROJECT_NAME="${1:-wordpress-dev}"
+
+# Validate PROJECT_NAME (allow letters, digits, hyphens, underscores only)
+if ! echo "$PROJECT_NAME" | grep -Eq '^[A-Za-z0-9_-]+$'; then
+    red "❌ Invalid project name: '$PROJECT_NAME'"
+    echo "Use only letters, numbers, hyphens, and underscores."
+    exit 1
+fi
+
 echo "$(blue "🚀 Creating WordPress Development Environment: $PROJECT_NAME")"
+
+# Cleanup on interrupt before .env is written
+SETUP_COMPLETE=0
+cleanup_on_exit() {
+    if [ "$SETUP_COMPLETE" -eq 0 ] && [ -n "${PROJECT_DIR:-}" ] && [ -d "$PROJECT_DIR" ] && [ ! -f "$PROJECT_DIR/.env" ]; then
+        red "⚠️  Setup interrupted — removing partial project directory: $PROJECT_DIR"
+        rm -rf "$PROJECT_DIR"
+    fi
+}
+trap cleanup_on_exit EXIT INT TERM
 
 # Check dependencies
 check_dependencies() {
@@ -28,6 +46,10 @@ check_dependencies() {
 
     if ! command -v make >/dev/null 2>&1; then
         missing_deps+=("make")
+    fi
+
+    if ! command -v openssl >/dev/null 2>&1; then
+        missing_deps+=("openssl")
     fi
 
     if [ ${#missing_deps[@]} -gt 0 ]; then
@@ -54,7 +76,8 @@ check_dependencies
 detect_user_ids
 
 mkdir -p "$PROJECT_NAME"
-cd "$PROJECT_NAME"
+PROJECT_DIR="$(cd "$PROJECT_NAME" && pwd)"
+cd "$PROJECT_DIR"
 
 ############################################
 #  .env + .env.example
@@ -110,8 +133,11 @@ fi
 
 # Always provide an example for teammates
 cp -f .env .env.example
-# Remove sensitive data from example
-sed -i.bak -e 's/password=wordpress_secure_[a-f0-9]*/password=your_secure_password_here/g'            -e 's/password=root_secure_[a-f0-9]*/password=your_secure_root_password_here/g'            .env.example && rm -f .env.example.bak
+# Remove sensitive data from example (key-based replacement: works regardless of value pattern)
+sed -i.bak \
+    -e 's|^\(DB_PASSWORD=\).*|\1your_secure_password_here|' \
+    -e 's|^\(DB_ROOT_PASSWORD=\).*|\1your_secure_root_password_here|' \
+    .env.example && rm -f .env.example.bak
 
 ############################################
 #  docker-compose.yml  (persistent wpcli + exec)
@@ -207,7 +233,6 @@ services:
       PMA_HOST: db
       PMA_USER: ${DB_USER:-wordpress}
       PMA_PASSWORD: ${DB_PASSWORD:-wordpress}
-      PMA_ARBITRARY: 1
       UPLOAD_LIMIT: ${PMA_UPLOAD_LIMIT:-128M}
       MEMORY_LIMIT: 256M
       MAX_EXECUTION_TIME: 300
@@ -220,7 +245,7 @@ services:
 
   # Persistent wpcli container (no more "Creating 2/2" spam)
   wpcli:
-    image: wordpress:cli-php8.4
+    image: "wordpress:cli-php${PHP_VERSION:-8.4}"
     working_dir: /var/www/html
     command: tail -f /dev/null
     environment:
@@ -251,7 +276,6 @@ services:
 
   mailpit:
     image: axllent/mailpit:latest
-    profiles: ["dev"]
     ports:
       - "${MAILPIT_HTTP_PORT:-8025}:8025"
       - "${MAILPIT_SMTP_PORT:-1025}:1025"
@@ -277,7 +301,11 @@ DOCKER_EOF
 cat > Makefile << 'MAKEFILE_EOF'
 # WordPress Development Environment
 .DEFAULT_GOAL := help
-.PHONY: help up down install clean shell db-shell logs         plugin theme backup restore db-import list-backups fix-permissions         wait-db wp sr cron-run prune-backups phpinfo test health restart         plugin-repo plugin-clone plugin-list theme-repo theme-clone
+.PHONY: \
+	help up down install clean shell db-shell logs \
+	plugin theme backup restore db-import list-backups fix-permissions \
+	wait-db wp sr cron-run phpinfo test health restart \
+	plugin-repo plugin-clone plugin-list theme-repo theme-clone
 
 # Stop "make[1]: on entre/quitte le répertoire ..." messages
 MAKEFLAGS += --no-print-directory
@@ -335,11 +363,12 @@ health: ## Check service health
 	@echo "Database connection test:"
 	@$(DB_EXEC) mariadb -u"$${DB_USER:-wordpress}" -p"$${DB_PASSWORD:-wordpress}" -e "SELECT 'DB OK' as status, VERSION() as version;" "$${DB_NAME:-wordpress}" 2>/dev/null || echo "❌ Database connection failed"
 
-install: up wait-db ## Download, configure and install WordPress
+install: up ## Download, configure and install WordPress
+	@if [ -f wordpress/wp-config.php ]; then 		echo "⚠️  WordPress already installed (wordpress/wp-config.php exists)."; 		echo "   Run 'make clean' first to reinstall from scratch."; 		exit 1; 	fi
 	@echo "📦 Installing WordPress..."
-	@$(RUN_WP) core download --path=/var/www/html --skip-content --force
+	@$(RUN_WP) core download --path=/var/www/html --skip-content
 	@echo "🔧 Creating wp-config.php..."
-	@$(RUN_WP) config create 		--dbname="$${DB_NAME:-wordpress}" 		--dbuser="$${DB_USER:-wordpress}" 		--dbpass="$${DB_PASSWORD:-wordpress}" 		--dbhost=db 		--skip-check --force
+	@$(RUN_WP) config create 		--dbname="$${DB_NAME:-wordpress}" 		--dbuser="$${DB_USER:-wordpress}" 		--dbpass="$${DB_PASSWORD:-wordpress}" 		--dbhost=db 		--skip-check
 	@$(RUN_WP) config set WP_DEBUG "$${WP_DEBUG:-true}" --raw
 	@$(RUN_WP) config set WP_DEBUG_LOG "$${WP_DEBUG_LOG:-true}" --raw
 	@$(RUN_WP) config set WP_DEBUG_DISPLAY "$${WP_DEBUG_DISPLAY:-false}" --raw
@@ -349,9 +378,9 @@ install: up wait-db ## Download, configure and install WordPress
 	@ADMIN_PASS="$$(openssl rand -base64 16 | tr -d '=' | head -c 16)"; 	ADMIN_EMAIL="admin@$$(echo $${WP_URL:-http://localhost:8080} | sed 's|https\?://||' | sed 's|:.*||').local"; 	$(RUN_WP) core install 		--url="$${WP_URL:-http://localhost:8080}" 		--title="$${PROJECT_NAME:-WordPress Dev} Site" 		--admin_user=admin 		--admin_password="$$ADMIN_PASS" 		--admin_email="$$ADMIN_EMAIL" 		--skip-email; 	echo ""; 	echo "✅ WordPress installed successfully!"; 	echo "🌐 URL: $${WP_URL:-http://localhost:8080}"; 	echo "👤 Username: admin"; 	echo "🔑 Password: $$ADMIN_PASS"; 	echo "📧 Email: $$ADMIN_EMAIL"
 	@$(MAKE) fix-permissions
 
-clean: ## Reset everything (removes all data!)
+clean: ## Reset everything (removes all data!) — pass FORCE=1 for non-interactive
 	@echo "⚠️  This will delete ALL data including database and uploads!"
-	@read -p "Are you sure? (y/N): " confirm; 	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then 		$(DOCKER_COMPOSE) down -v; 		rm -rf wordpress plugins themes uploads .docker 2>/dev/null || true; 		echo "✅ Environment reset!"; 	else 		echo "❌ Operation cancelled"; 	fi
+	@if [ -n "$(FORCE)" ]; then 		confirm=y; 	else 		read -p "Are you sure? (y/N): " confirm; 	fi; 	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then 		$(DOCKER_COMPOSE) down -v; 		rm -rf wordpress plugins themes uploads .docker 2>/dev/null || true; 		echo "✅ Environment reset!"; 	else 		echo "❌ Operation cancelled"; 	fi
 
 shell: ## Access WordPress container shell
 	@$(DOCKER_COMPOSE) exec wordpress bash
@@ -365,8 +394,10 @@ logs: ## Show logs (usage: make logs [service=wordpress])
 fix-permissions: ## Fix file permissions for development
 	@echo "🔧 Fixing permissions..."
 	@mkdir -p wordpress plugins themes uploads backups .docker/mysql-logs
-	@chmod -R 0777 wordpress plugins themes uploads backups 2>/dev/null || true
-	@$(DOCKER_COMPOSE) exec -T wordpress bash -lc 		'install -d -m 0777 /var/www/html/wp-content/{plugins,themes,uploads} 2>/dev/null || true; 		 chmod -R 0777 /var/www/html 2>/dev/null || true'
+	@chmod 0700 backups 2>/dev/null || true
+	@find wordpress plugins themes uploads -type d -exec chmod 0775 {} + 2>/dev/null || true
+	@find wordpress plugins themes uploads -type f -exec chmod 0664 {} + 2>/dev/null || true
+	@$(DOCKER_COMPOSE) exec -T wordpress bash -lc 		'install -d -m 0775 /var/www/html/wp-content/plugins /var/www/html/wp-content/themes /var/www/html/wp-content/uploads 2>/dev/null || true; 		 find /var/www/html -type d -exec chmod 0775 {} + 2>/dev/null || true; 		 find /var/www/html -type f -exec chmod 0664 {} + 2>/dev/null || true'
 	@echo "✅ Permissions fixed"
 
 plugin: fix-permissions ## Create plugin (usage: make plugin name=my-plugin)
@@ -543,7 +574,7 @@ html_errors = On
 
 ; Session and timezone
 session.gc_maxlifetime = 3600
-date.timezone = Europe/Paris
+; date.timezone is set via TZ env var from .env (passed by docker-compose)
 
 ; OPcache for development
 opcache.enable = 1
@@ -571,24 +602,25 @@ cat > .gitignore << 'GITIGNORE_EOF'
 wordpress/
 uploads/
 
-# Plugins (each should have their own repo)
-plugins/
-# Alternative: ignore all but keep structure
-# plugins/*
-# !plugins/.gitkeep
+# Plugins (each should have their own repo — preserve directory via .gitkeep)
+plugins/*
+!plugins/.gitkeep
 
-# Themes (if using separate repos for themes too)
-themes/
-# Alternative: ignore all but keep structure
-# themes/*
-# !themes/.gitkeep
+# Themes (each should have their own repo — preserve directory via .gitkeep)
+themes/*
+!themes/.gitkeep
 
 # Database backups (contain sensitive data)
-backups/*.sql
-backups/*.sql.gz
+backups/
 
 # Environment and secrets
 .env
+
+# Generated helper scripts (regenerated by setup.sh)
+backup.sh
+restore.sh
+health-check.sh
+plugin-status.sh
 
 # System files
 .DS_Store
@@ -603,10 +635,11 @@ Thumbs.db
 *~
 
 # Docker volumes and temp
-.docker/mysql-logs/*.log
+.docker/
 
 # Backup temp files
 *.tmp
+*.sql.gz.tmp
 GITIGNORE_EOF
 
 ############################################
@@ -810,7 +843,6 @@ docker compose exec -T db sh -lc '
   echo "✅ Backup created: $FILE";
 '
 BACKUP_EOF
-chmod +x backup.sh
 
 ############################################
 #  restore.sh (optional helper; uses /backups in container)
@@ -827,28 +859,29 @@ if [ $# -eq 0 ]; then
 fi
 
 FILE="$1"
-if [ -f "backups/$FILE" ]; then
-  PATH_IN="/backups/$FILE"
-elif [ -f "$FILE" ]; then
-  PATH_IN="$FILE"
-else
-  echo "❌ File not found: $FILE"
-  exit 1
-fi
+case "$FILE" in
+  /backups/*) PATH_IN="$FILE" ;;
+  /*)         PATH_IN="$FILE" ;;
+  backups/*)  PATH_IN="/backups/${FILE#backups/}" ;;
+  *)          PATH_IN="/backups/$FILE" ;;
+esac
 
-docker compose exec -T db sh -lc "
-  set -e;
-  [ -f '$PATH_IN' ] || { echo '❌ Not found in container: $PATH_IN'; exit 1; }
-  echo '📦 Restoring from $PATH_IN...';
-  if echo '$PATH_IN' | grep -q '\.gz; then
-    gunzip -c '$PATH_IN' | mariadb -u"\$MYSQL_USER" -p"\$MYSQL_PASSWORD" "\$MYSQL_DATABASE";
-  else
-    mariadb -u"\$MYSQL_USER" -p"\$MYSQL_PASSWORD" "\$MYSQL_DATABASE" < '$PATH_IN';
-  fi
-  echo '✅ Restore done.'
-"
+export PATH_IN
+docker compose exec -T -e PATH_IN db sh -lc '
+  set -e
+  [ -f "$PATH_IN" ] || { echo "❌ Backup file not found in container: $PATH_IN"; exit 1; }
+  echo "📦 Restoring from $PATH_IN..."
+  case "$PATH_IN" in
+    *.gz)
+      gunzip -c "$PATH_IN" | mariadb -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"
+      ;;
+    *)
+      mariadb -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" < "$PATH_IN"
+      ;;
+  esac
+  echo "✅ Database restored from $PATH_IN"
+'
 RESTORE_EOF
-chmod +x restore.sh
 
 ############################################
 #  Health check script
@@ -856,10 +889,11 @@ chmod +x restore.sh
 cat > health-check.sh << 'HEALTH_EOF'
 #!/bin/bash
 set -euo pipefail
-red() { echo -e "␛[31m$1␛[0m"; }
-green() { echo -e "␛[32m$1␛[0m"; }
-yellow() { echo -e "␛[33m$1␛[0m"; }
-blue() { echo -e "␛[34m$1␛[0m"; }
+ESC=$(printf '\033')
+red()    { printf '%s[31m%s%s[0m\n' "$ESC" "$1" "$ESC"; }
+green()  { printf '%s[32m%s%s[0m\n' "$ESC" "$1" "$ESC"; }
+yellow() { printf '%s[33m%s%s[0m\n' "$ESC" "$1" "$ESC"; }
+blue()   { printf '%s[34m%s%s[0m\n' "$ESC" "$1" "$ESC"; }
 
 [ -f .env ] && source .env || { red "❌ .env file not found"; exit 1; }
 
@@ -969,7 +1003,6 @@ else
   exit 1
 fi
 HEALTH_EOF
-chmod +x health-check.sh
 
 ############################################
 #  Plugin development helper scripts
@@ -1062,7 +1095,6 @@ else
   echo "WordPress container not running"
 fi
 PLUGIN_STATUS_EOF
-chmod +x plugin-status.sh
 
 ############################################
 #  Final output + folder perms
@@ -1072,10 +1104,29 @@ mkdir -p plugins themes uploads backups .docker/mysql-logs wordpress
 touch plugins/.gitkeep themes/.gitkeep
 
 # Dev-friendly perms so both www-data and wpcli can write
-chmod -R 0777 wordpress plugins themes uploads backups 2>/dev/null || true
+find wordpress plugins themes uploads -type d -exec chmod 0775 {} + 2>/dev/null || true
+find wordpress plugins themes uploads -type f -exec chmod 0664 {} + 2>/dev/null || true
+chmod 0700 backups 2>/dev/null || true
 
 # Set proper permissions for scripts
 chmod +x backup.sh restore.sh health-check.sh plugin-status.sh
+
+# Validate generated docker-compose.yml syntax
+if command -v docker >/dev/null 2>&1; then
+    if docker compose version >/dev/null 2>&1; then
+        if ! docker compose config >/dev/null 2>&1; then
+            red "❌ Generated docker-compose.yml is invalid"
+            exit 1
+        fi
+    elif command -v docker-compose >/dev/null 2>&1; then
+        if ! docker-compose config >/dev/null 2>&1; then
+            red "❌ Generated docker-compose.yml is invalid"
+            exit 1
+        fi
+    fi
+fi
+
+SETUP_COMPLETE=1
 
 echo ""
 green "✅ Enhanced WordPress Development Environment created with Plugin Development Workflow!"
