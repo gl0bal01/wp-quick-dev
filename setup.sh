@@ -5,11 +5,11 @@
 # gl0bal01 - WpQuickDev
 set -euo pipefail
 
-# Color output functions
-red() { echo -e "\033[31m$1\033[0m"; }
-green() { echo -e "\033[32m$1\033[0m"; }
-yellow() { echo -e "\033[33m$1\033[0m"; }
-blue() { echo -e "\033[34m$1\033[0m"; }
+ESC=$(printf '\033')
+red()    { printf '%s[31m%s%s[0m\n' "$ESC" "$1" "$ESC"; }
+green()  { printf '%s[32m%s%s[0m\n' "$ESC" "$1" "$ESC"; }
+yellow() { printf '%s[33m%s%s[0m\n' "$ESC" "$1" "$ESC"; }
+blue()   { printf '%s[34m%s%s[0m\n' "$ESC" "$1" "$ESC"; }
 
 PROJECT_NAME="${1:-wordpress-dev}"
 
@@ -22,10 +22,9 @@ fi
 
 echo "$(blue "🚀 Creating WordPress Development Environment: $PROJECT_NAME")"
 
-# Cleanup on interrupt before .env is written
-SETUP_COMPLETE=0
+# Remove partial project dir if setup aborts before .env is written
 cleanup_on_exit() {
-    if [ "$SETUP_COMPLETE" -eq 0 ] && [ -n "${PROJECT_DIR:-}" ] && [ -d "$PROJECT_DIR" ] && [ ! -f "$PROJECT_DIR/.env" ]; then
+    if [ -n "${PROJECT_DIR:-}" ] && [ -d "$PROJECT_DIR" ] && [ ! -f "$PROJECT_DIR/.env" ]; then
         red "⚠️  Setup interrupted — removing partial project directory: $PROJECT_DIR"
         rm -rf "$PROJECT_DIR"
     fi
@@ -395,9 +394,8 @@ fix-permissions: ## Fix file permissions for development
 	@echo "🔧 Fixing permissions..."
 	@mkdir -p wordpress plugins themes uploads backups .docker/mysql-logs
 	@chmod 0700 backups 2>/dev/null || true
-	@find wordpress plugins themes uploads -type d -exec chmod 0775 {} + 2>/dev/null || true
-	@find wordpress plugins themes uploads -type f -exec chmod 0664 {} + 2>/dev/null || true
-	@$(DOCKER_COMPOSE) exec -T wordpress bash -lc 		'install -d -m 0775 /var/www/html/wp-content/plugins /var/www/html/wp-content/themes /var/www/html/wp-content/uploads 2>/dev/null || true; 		 find /var/www/html -type d -exec chmod 0775 {} + 2>/dev/null || true; 		 find /var/www/html -type f -exec chmod 0664 {} + 2>/dev/null || true'
+	@find wordpress plugins themes uploads \( -type d -exec chmod 0775 {} + \) -o \( -type f -exec chmod 0664 {} + \) 2>/dev/null || true
+	@$(DOCKER_COMPOSE) exec -T wordpress bash -lc 		'install -d -m 0775 /var/www/html/wp-content/plugins /var/www/html/wp-content/themes /var/www/html/wp-content/uploads 2>/dev/null || true; 		 find /var/www/html \( -type d -exec chmod 0775 {} + \) -o \( -type f -exec chmod 0664 {} + \) 2>/dev/null || true'
 	@echo "✅ Permissions fixed"
 
 plugin: fix-permissions ## Create plugin (usage: make plugin name=my-plugin)
@@ -1103,30 +1101,26 @@ mkdir -p plugins themes uploads backups .docker/mysql-logs wordpress
 # Create .gitkeep files to maintain directory structure
 touch plugins/.gitkeep themes/.gitkeep
 
-# Dev-friendly perms so both www-data and wpcli can write
-find wordpress plugins themes uploads -type d -exec chmod 0775 {} + 2>/dev/null || true
-find wordpress plugins themes uploads -type f -exec chmod 0664 {} + 2>/dev/null || true
+# Dev-friendly perms on the freshly-created top-level dirs only.
+# Recursive perms on WP core are handled later by `make fix-permissions`.
+chmod 0775 wordpress plugins themes uploads 2>/dev/null || true
 chmod 0700 backups 2>/dev/null || true
 
 # Set proper permissions for scripts
 chmod +x backup.sh restore.sh health-check.sh plugin-status.sh
 
 # Validate generated docker-compose.yml syntax
-if command -v docker >/dev/null 2>&1; then
-    if docker compose version >/dev/null 2>&1; then
-        if ! docker compose config >/dev/null 2>&1; then
-            red "❌ Generated docker-compose.yml is invalid"
-            exit 1
-        fi
-    elif command -v docker-compose >/dev/null 2>&1; then
-        if ! docker-compose config >/dev/null 2>&1; then
-            red "❌ Generated docker-compose.yml is invalid"
-            exit 1
-        fi
-    fi
+if docker compose version >/dev/null 2>&1; then
+    COMPOSE_VALIDATE="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE_VALIDATE="docker-compose"
+else
+    COMPOSE_VALIDATE=""
 fi
-
-SETUP_COMPLETE=1
+if [ -n "$COMPOSE_VALIDATE" ] && ! $COMPOSE_VALIDATE config >/dev/null 2>&1; then
+    red "❌ Generated docker-compose.yml is invalid"
+    exit 1
+fi
 
 echo ""
 green "✅ Enhanced WordPress Development Environment created with Plugin Development Workflow!"
